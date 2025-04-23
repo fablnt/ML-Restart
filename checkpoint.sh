@@ -13,7 +13,7 @@ DEFAULT_INTERVAL=10
 
 function setup_environment {
     local script_name="$1"
-    CKPT_DIR="./checkpoints_${script_name}"
+    CKPT_DIR="./checkpoints_${script_name}_${ID_NAME}"
     LOG_FILE="${CKPT_DIR}/execution.log"
     APP_OUTPUT_FILE="${CKPT_DIR}/application_output.log"
     
@@ -53,8 +53,9 @@ function start_program {
 
     # Run dmtcp_launch and capture output with tee for real-time logging
     echo "$(date): Launching dmtcp_launch for $script_path" >> "$LOG_FILE"
-    dmtcp_launch --ckptdir "$CKPT_DIR" --interval "$interval" \
-        python3 "$script_path" 2>&1 | tee -a "$APP_OUTPUT_FILE" &
+    (dmtcp_launch --ckptdir "$CKPT_DIR" --interval "$interval" \
+    python3 "$script_path" "${PYTHON_ARGS[@]}" > "$APP_OUTPUT_FILE" 2>&1) &
+
     local pid=$!
     echo "$(date): Process started with PID: $pid" >> "$LOG_FILE"
 }
@@ -83,26 +84,54 @@ function restart_program {
 
     # Run dmtcp_restart and capture output with tee
     echo "$(date): Launching dmtcp_restart for $LAST_CKPT" >> "$LOG_FILE"
-    dmtcp_restart --interval "$interval" "$LAST_CKPT" 2>&1 | tee -a "$APP_OUTPUT_FILE" &
+    dmtcp_restart --interval "$interval" "$LAST_CKPT" >> "$APP_OUTPUT_FILE" &
     local pid=$!
     echo "$(date): Process restarted with PID: $pid" >> "$LOG_FILE"
 }
 
-# Main execution
-if [ $# -lt 2 ]; then
-    echo "Usage:"
-    echo "  $0 start <script.py> [--interval SECONDS]"
-    echo "  $0 restart <script.py> [--interval SECONDS]"
-    exit 1
-fi
-
-ACTION="$1"
-SCRIPT="$2"
+# --- Main Execution ---
+ACTION=""
+SCRIPT=""
 INTERVAL="$DEFAULT_INTERVAL"
+ID_NAME=""
+PYTHON_ARGS=()
 
-# Optional interval parsing
-if [ "$3" == "--interval" ] && [ -n "$4" ]; then
-    INTERVAL="$4"
+# Parse args manually to enforce order and handle optional flags
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        start|restart)
+            ACTION="$1"
+            shift
+            ;;
+        -id)
+            ID_NAME="$2"
+            shift 2
+            ;;
+        --interval)
+            INTERVAL="$2"
+            shift 2
+            ;;
+        *.py)
+            SCRIPT="$1"
+            shift
+            PYTHON_ARGS=("$@")  # everything after .py goes to Python script
+            break
+            ;;
+        *)
+            echo "Unknown or misplaced argument: $1"
+            echo "Usage:"
+            echo "  $0 start|restart [-id NAME] [--interval SECONDS] script.py [args...]"
+            exit 1
+            ;;
+    esac
+done
+
+# Check mandatory arguments
+if [[ -z "$ACTION" || -z "$SCRIPT" ]]; then
+    echo "Missing required parameters."
+    echo "Usage:"
+    echo "  $0 start|restart [-id NAME] [--interval SECONDS] script.py [args...]"
+    exit 1
 fi
 
 case "$ACTION" in
