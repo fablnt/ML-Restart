@@ -1,5 +1,22 @@
 #!/bin/bash
 
+# Function to find an available TCP port
+find_free_port() {
+    local port
+    local max_attempts=10
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        port=$((RANDOM % 10000 + 50000))  # Restrict to 50000–60000
+        if ! ss -tuln | grep -q ":$port "; then
+            echo $port
+            return
+        fi
+        attempt=$((attempt + 1))
+    done
+    echo "Error: Could not find free port after $max_attempts attempts" >&2
+    exit 1
+}
+
 function setup_environment {
     local script_name="$1"
     CKPT_DIR="./checkpoints_${script_name}_${ID_NAME}"
@@ -34,7 +51,7 @@ function start_program {
 
     # Find a free port for the coordinator
     local COORD_PORT
-    COORD_PORT=$PORT
+    COORD_PORT=$(find_free_port)
     echo "$(date): Assigned coordinator port: $COORD_PORT" >> "$LOG_FILE"
 
     # Start the DMTCP coordinator in the background
@@ -107,7 +124,7 @@ function restart_program {
     echo "Restarting from checkpoint: $(basename "$LAST_CKPT")" | tee -a "$LOG_FILE"
     echo "Application output: $APP_OUTPUT_FILE" | tee -a "$LOG_FILE"
 
-    COORD_PORT=$PORT
+    COORD_PORT=$(find_free_port)
     # Start a new coordinator on the same port
     dmtcp_coordinator --exit-on-last --coord-port "$COORD_PORT"  >> "$CKPT_DIR/coordinator.log" 2>&1 &
     local COORD_PID=$!
@@ -135,7 +152,7 @@ function restart_program {
     #export PYTHONUNBUFFERED=1
 
     # Run dmtcp_restart and capture output with tee
-    echo "$(date): Launching dmtcp_restart for $LAST_CKPT" >> "$LOG_FILE"
+mpcheckpoint@10.79.5.90    echo "$(date): Launching dmtcp_restart for $LAST_CKPT" >> "$LOG_FILE"
     (./"$LAST_CKPT" >> "$APP_OUTPUT_FILE" 2>&1) &
     #(./"$LAST_CKPT" >> "$APP_OUTPUT_FILE" 2>&1) &
     local pid=$!
@@ -161,11 +178,6 @@ while [[ $# -gt 0 ]]; do
             ID_NAME="$2"
             shift 2
             ;;
-	-p)
-	    PORT="$2"
-	    echo "echo dio porco $PORT"	
-    	    shift 2
-	    ;;	    
         *.py)
             SCRIPT="$1"
             shift
