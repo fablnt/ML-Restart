@@ -162,8 +162,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
 	-p)
-	    PORT="$2"
-	    echo "echo dio porco $PORT"	
+	    PORT="$2"	
     	    shift 2
 	    ;;	    
         *.py)
