@@ -1,31 +1,11 @@
 #!/bin/bash
 
-# DMTCP Wrapper Script for Standard Linux
-# Features:
-# - Auto-runs Python scripts using system Python
-# - Captures application output (stdout/stderr) to application_output.log
-# - Organized checkpoint directories
-# - Automatically assigns unique DMTCP coordinator for each process
-# - Enhanced error handling for coordinator startup
-
-# Function to find an available TCP port
-find_free_port() {
-    local port
-    local max_attempts=10
-    local attempt=1
-    while [ $attempt -le $max_attempts ]; do
-        port=$((RANDOM % 10000 + 50000))  # Restrict to 50000–60000
-        if ! ss -tuln | grep -q ":$port "; then
-            echo $port
-            return
-        fi
-        attempt=$((attempt + 1))
-    done
-    echo "Error: Could not find free port after $max_attempts attempts" >&2
-    exit 1
-}
+# Specify the absolute path to the bin directory of dmtcp (not to be filled in case of successful make install)
+DMTCP_EXEC=""
+INTERVAL=10
 
 function setup_environment {
+
     local script_name="$1"
     CKPT_DIR="./checkpoints_${script_name}_${ID_NAME}"
     LOG_FILE="${CKPT_DIR}/execution.log"
@@ -47,41 +27,27 @@ function setup_environment {
     echo "$(date): Setting up for $script_name" >> "$LOG_FILE"
     echo "$(date): Checkpoint directory: $CKPT_DIR" >> "$LOG_FILE"
     echo "$(date): Application output will be written to: $APP_OUTPUT_FILE" >> "$LOG_FILE"
+
 }
 
-function start_program {
-    local script_path="$1"
 
+function start_program {
+
+    local script_path="$1"
     local script_name
     script_name=$(basename "$script_path" .py)
 
     setup_environment "$script_name"
 
-    # Find a free port for the coordinator
+   
     local COORD_PORT
-    COORD_PORT=$(find_free_port)
+    COORD_PORT=$PORT
     echo "$(date): Assigned coordinator port: $COORD_PORT" >> "$LOG_FILE"
 
     # Start the DMTCP coordinator in the background
-    dmtcp_coordinator --ckptdir "$CKPT_DIR" --coord-port "$COORD_PORT" >> "$CKPT_DIR/coordinator.log" 2>&1 &
+    ${DMTCP_EXEC}dmtcp_coordinator --exit-on-last --ckptdir "$CKPT_DIR" --coord-port "$COORD_PORT" >> "$CKPT_DIR/coordinator.log" 2>&1 &
     local COORD_PID=$!
     echo "$(date): Started coordinator with PID: $COORD_PID" >> "$LOG_FILE"
-
-    # Wait and retry to ensure the coordinator is up
-    local max_attempts=5
-    local attempt=1
-    while [ $attempt -le $max_attempts ]; do
-        if ps -p "$COORD_PID" > /dev/null; then
-            break
-        fi
-        sleep 0.2
-        attempt=$((attempt + 1))
-    done
-    if [ $attempt -gt $max_attempts ]; then
-        echo "Error: Failed to start DMTCP coordinator on port $COORD_PORT after $max_attempts attempts" | tee -a "$LOG_FILE"
-        cat "$CKPT_DIR/coordinator.log" >> "$LOG_FILE"
-        exit 1
-    fi
 
     # Save coordinator port to config file
     echo "COORD_PORT=$COORD_PORT" > "$CKPT_DIR/dmtcp_config"
@@ -96,33 +62,34 @@ function start_program {
     # Set environment variables for DMTCP
     export DMTCP_COORD_PORT="$COORD_PORT"
     export DMTCP_CKPT_DIR="$CKPT_DIR"
-    export PYTHONUNBUFFERED=1
+    export DMTCP_DL_PLUGIN=0
 
-    # Run dmtcp_launch and capture output with tee for real-time logging
+    # Launches the first execution of the script with dmtcp_launch
     echo "$(date): Launching dmtcp_launch for $script_path" >> "$LOG_FILE"
-    (dmtcp_launch python3 "$script_path" "${PYTHON_ARGS[@]}" > "$APP_OUTPUT_FILE" 2>&1) &
+    (${DMTCP_EXEC}dmtcp_launch --interval $INTERVAL --ckpt-open-files --ckptdir $CKPT_DIR python3 -u "$script_path" "${PYTHON_ARGS[@]}" > "$APP_OUTPUT_FILE" 2>&1) &
     local pid=$!
     echo "$(date): Process started with PID: $pid" >> "$LOG_FILE"
+
 }
 
-function restart_program {
-    local script_path="$1"
 
+function restart_program {
+
+    local script_path="$1"
     local script_name
     script_name=$(basename "$script_path" .py)
 
     setup_environment "$script_name"
+    CONFIG_FILE="${CKPT_DIR}/dmtcp_config"
 
-    # Read the coordinator port from config
-    CONFIG_FILE="$CKPT_DIR/dmtcp_config"
     if [ ! -f "$CONFIG_FILE" ]; then
         echo "Error: Configuration file $CONFIG_FILE not found" | tee -a "$LOG_FILE"
         exit 1
     fi
     source "$CONFIG_FILE"
 
-    #LAST_CKPT=$(ls -t "$CKPT_DIR"/ckpt_*.dmtcp 2>/dev/null | head -n 1)
-    LAST_CKPT="$CKPT_DIR/dmtcp_restart_script.sh"
+    
+    LAST_CKPT="$CKPT_DIR/dmtcp_restart_script.sh"    
 
     if [ -z "$LAST_CKPT" ]; then
         echo "Error: No checkpoint found in $CKPT_DIR" | tee -a "$LOG_FILE"
@@ -132,39 +99,22 @@ function restart_program {
     echo "Restarting from checkpoint: $(basename "$LAST_CKPT")" | tee -a "$LOG_FILE"
     echo "Application output: $APP_OUTPUT_FILE" | tee -a "$LOG_FILE"
 
-    COORD_PORT=$(find_free_port)
+    COORD_PORT=$PORT
     # Start a new coordinator on the same port
-    dmtcp_coordinator --coord-port "$COORD_PORT"  >> "$CKPT_DIR/coordinator.log" 2>&1 &
+    ${DMTCP_EXEC}dmtcp_coordinator --interval $INTERVAL --exit-on-last --ckptdir $CKPT_DIR --coord-port "$COORD_PORT"  >> "$CKPT_DIR/coordinator.log" 2>&1 &
     local COORD_PID=$!
     echo "$(date): Started coordinator with PID: $COORD_PID" >> "$LOG_FILE"
 
-    # Wait and retry to ensure the coordinator is up
-    local max_attempts=5
-    local attempt=1
-    while [ $attempt -le $max_attempts ]; do
-        if ps -p "$COORD_PID" > /dev/null; then
-            break
-        fi
-        sleep 0.2
-        attempt=$((attempt + 1))
-    done
-    if [ $attempt -gt $max_attempts ]; then
-        echo "Error: Failed to start DMTCP coordinator on port $COORD_PORT after $max_attempts attempts" | tee -a "$LOG_FILE"
-        cat "$CKPT_DIR/coordinator.log" >> "$LOG_FILE"
-        exit 1
-    fi
-
+    
     # Set environment variables for DMTCP
     export DMTCP_COORD_PORT="$COORD_PORT"
     export DMTCP_CKPT_DIR="$CKPT_DIR"
-    export PYTHONUNBUFFERED=1
 
-    # Run dmtcp_restart and capture output with tee
+    # Restart the script
     echo "$(date): Launching dmtcp_restart for $LAST_CKPT" >> "$LOG_FILE"
-    (./"$LAST_CKPT" >> "$APP_OUTPUT_FILE" 2>&1) &
+    (./"$LAST_CKPT" &>> "$APP_OUTPUT_FILE") &
     local pid=$!
     echo "$(date): Process restarted with PID: $pid" >> "$LOG_FILE"
-
 
 }
 
@@ -185,6 +135,14 @@ while [[ $# -gt 0 ]]; do
             ID_NAME="$2"
             shift 2
             ;;
+     	-i)
+	    INTERVAL="$2"
+	    shift 2
+	    ;;
+    	-p)
+	    PORT="$2"	
+    	    shift 2
+	    ;;	    
         *.py)
             SCRIPT="$1"
             shift
