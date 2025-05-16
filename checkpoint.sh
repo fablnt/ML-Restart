@@ -7,7 +7,6 @@ INTERVAL=10
 function setup_environment {
 
     local script_name="$1"
-    CKPT_DIR="./checkpoints_${script_name}_${ID_NAME}"
     LOG_FILE="${CKPT_DIR}/execution.log"
     APP_OUTPUT_FILE="${CKPT_DIR}/application_output.log"
     CONFIG_FILE="${CKPT_DIR}/dmtcp_config"
@@ -166,12 +165,40 @@ if [[ -z "$ACTION" || -z "$SCRIPT" ]]; then
     exit 1
 fi
 
+base_name="output_${SCRIPT%.py}"
+
+# Aggiunge ID_NAME se non vuoto
+if [ -n "$ID_NAME" ]; then
+    base_name="${base_name}_${ID_NAME}"
+fi
+
+# Aggiunge args se presenti
+if [ "${#PYTHON_ARGS[@]}" -gt 0 ]; then
+    args_joined=$(IFS=_; echo "${PYTHON_ARGS[*]}")
+    base_name="${base_name}_${args_joined}"
+fi
+
+CKPT_DIR="./$base_name"
+
 case "$ACTION" in
     start)
-        start_program "$SCRIPT"
+        if [ -d "$CKPT_DIR" ]; then
+            read -p "Already existing directory would be overwritten, continue? (yes/no) " answer
+            if [[ "$answer" = "yes" || "$answer" = "y" ]]; then
+                start_program "$SCRIPT"
+            else
+                echo "Aborting..."
+            fi
+        else
+            start_program "$SCRIPT"
+        fi  
         ;;
     restart)
-        restart_program "$SCRIPT"
+        if [ -d "$CKPT_DIR" ]; then
+            restart_program "$SCRIPT"
+        else
+                echo "No directory to restart from."
+        fi
         ;;
     *)
         echo "Invalid action: $ACTION"
