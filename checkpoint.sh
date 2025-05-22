@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Specify the absolute path to the bin directory of dmtcp (not to be filled in case of successful make install)
-DMTCP_EXEC=""
-INTERVAL=10
+DMTCP_EXEC="/leonardo/home/userexternal/flentini/dmtcp/bin/"
+INTERVAL=20
 
 function setup_environment {
 
@@ -29,6 +29,24 @@ function setup_environment {
 
 }
 
+# Function to find a free port between 9000 and 65535 for the coordinator.
+find_free_port() {
+    local port
+    local max_attempts=10
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        port=$((RANDOM % (65535 - 9000 + 1) + 9000))  # Range: 9000–65535
+        if ! ss -tuln | grep -q ":$port "; then
+            echo $port
+            return
+        fi
+        attempt=$((attempt + 1))
+    done
+    echo "Error: Could not find free port after $max_attempts attempts" >&2
+    exit 1
+}
+
+
 
 function start_program {
 
@@ -40,7 +58,7 @@ function start_program {
 
    
     local COORD_PORT
-    COORD_PORT=$PORT
+    COORD_PORT=$(find_free_port)
     echo "$(date): Assigned coordinator port: $COORD_PORT" >> "$LOG_FILE"
 
     # Start the DMTCP coordinator in the background
@@ -65,10 +83,8 @@ function start_program {
 
     # Launches the first execution of the script with dmtcp_launch
     echo "$(date): Launching dmtcp_launch for $script_path" >> "$LOG_FILE"
-    (${DMTCP_EXEC}dmtcp_launch --interval $INTERVAL --ckpt-open-files --ckptdir $CKPT_DIR python3 -u "$script_path" "${PYTHON_ARGS[@]}" > "$APP_OUTPUT_FILE" 2>&1) &
-    local pid=$!
-    echo "$(date): Process started with PID: $pid" >> "$LOG_FILE"
-
+    (${DMTCP_EXEC}dmtcp_launch --interval $INTERVAL --ckpt-open-files --ckptdir $CKPT_DIR python3 -u "$script_path" "${PYTHON_ARGS[@]}" > "$APP_OUTPUT_FILE" 2>&1) 
+  
 }
 
 
@@ -98,22 +114,22 @@ function restart_program {
     echo "Restarting from checkpoint: $(basename "$LAST_CKPT")" | tee -a "$LOG_FILE"
     echo "Application output: $APP_OUTPUT_FILE" | tee -a "$LOG_FILE"
 
-    COORD_PORT=$PORT
+    local COORD_PORT
+    COORD_PORT=$(find_free_port)
+    echo "$(date): Assigned coordinator port: $COORD_PORT" >> "$LOG_FILE"
+
     # Start a new coordinator on the same port
     ${DMTCP_EXEC}dmtcp_coordinator --interval $INTERVAL --exit-on-last --ckptdir $CKPT_DIR --coord-port "$COORD_PORT"  >> "$CKPT_DIR/coordinator.log" 2>&1 &
     local COORD_PID=$!
     echo "$(date): Started coordinator with PID: $COORD_PID" >> "$LOG_FILE"
 
-    
     # Set environment variables for DMTCP
     export DMTCP_COORD_PORT="$COORD_PORT"
     export DMTCP_CKPT_DIR="$CKPT_DIR"
 
     # Restart the script
     echo "$(date): Launching dmtcp_restart for $LAST_CKPT" >> "$LOG_FILE"
-    (./"$LAST_CKPT" &>> "$APP_OUTPUT_FILE") &
-    local pid=$!
-    echo "$(date): Process restarted with PID: $pid" >> "$LOG_FILE"
+    (./"$LAST_CKPT" &>> "$APP_OUTPUT_FILE")
 
 }
 
@@ -183,12 +199,7 @@ CKPT_DIR="./$base_name"
 case "$ACTION" in
     start)
         if [ -d "$CKPT_DIR" ]; then
-            read -p "Already existing directory would be overwritten, continue? (yes/no) " answer
-            if [[ "$answer" = "yes" || "$answer" = "y" ]]; then
-                start_program "$SCRIPT"
-            else
-                echo "Aborting..."
-            fi
+            echo  " "$CKPT_DIR" already exists for "$SCRIPT" , remove the directory to launch a job with that configuration."
         else
             start_program "$SCRIPT"
         fi  
